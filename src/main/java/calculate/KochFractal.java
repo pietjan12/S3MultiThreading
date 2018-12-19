@@ -4,70 +4,92 @@
  */
 package calculate;
 
-import javafx.scene.paint.Color;
-
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Observable;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 
 /**
  *
  * @author Peter Boots
  * Modified for FUN3 by Gertjan Schouten
  */
-public class KochFractal {
-
+public class KochFractal extends Observable{
+    private KochManager manager;
+    private int counter = 0; // counter that gets incremented on completion of a task.
     private int level = 1;      // The current level of the fractal
     private int nrOfEdges = 3;  // The number of edges in the current level of the fractal
-    private KochManager manager;
 
-    //Threads
-    private Thread thread1;
-    private Thread thread2;
-    private Thread thread3;
-
-    //Runnables
-    private EdgeGenerator leftRunnable;
-    private EdgeGenerator bottomRunnable;
-    private EdgeGenerator rightRunnable;
+    private ExecutorService executorService;
+    //List of java FX tasks
+    private ArrayList<EdgeGenerator> edgeGenerators;
+    //List of edges rendered so far, held by the KochFractal until all tasks are completed.
+    private ArrayList<Edge> edges;
 
     public KochFractal(KochManager manager) {
         this.manager = manager;
+        addObserver(manager);
+        executorService = Executors.newFixedThreadPool(3);
+        edgeGenerators = new ArrayList<>();
+        edges = new ArrayList<>();
     }
 
+    /**
+     * Creates the edgeGenerator tasks and sends them off to the executorservice
+     */
     public void generateEdges() {
-        leftRunnable = new EdgeGenerator(0f,nrOfEdges,0.5, 0.0, (1 - Math.sqrt(3.0) / 2.0) / 2, 0.75, level);
-        bottomRunnable = new EdgeGenerator(1f/3f,nrOfEdges,(1 - Math.sqrt(3.0) / 2.0) / 2, 0.75, (1 + Math.sqrt(3.0) / 2.0) / 2, 0.75, level);
-        rightRunnable = new EdgeGenerator(2f/3f,nrOfEdges,(1 + Math.sqrt(3.0) / 2.0) / 2, 0.75, 0.5, 0.0, level);
+        //Reset values to their defaults
+        edgeGenerators.clear();
+        counter = 0;
 
-        thread1 = new Thread(leftRunnable);
-        thread2 = new Thread(bottomRunnable);
-        thread3 = new Thread(rightRunnable);
+        //fill list of Tasks with necessary parameters
+        edgeGenerators.add(new EdgeGenerator(0f,nrOfEdges,0.5, 0.0, (1 - Math.sqrt(3.0) / 2.0) / 2, 0.75, level));
+        edgeGenerators.add(new EdgeGenerator(1f/3f,nrOfEdges,(1 - Math.sqrt(3.0) / 2.0) / 2, 0.75, (1 + Math.sqrt(3.0) / 2.0) / 2, 0.75, level));
+        edgeGenerators.add(new EdgeGenerator(2f/3f,nrOfEdges,(1 + Math.sqrt(3.0) / 2.0) / 2, 0.75, 0.5, 0.0, level));
 
-        thread1.start();
-        thread2.start();
-        thread3.start();
 
-        try{
-            thread1.join();
-            thread2.join();
-            thread3.join();
+        for(int i = 0; i < edgeGenerators.size(); i++) {
+            EdgeGenerator e = edgeGenerators.get(i);
+            //get matching UI elements and bind properties.
+            manager.progressBars().get(i).progressProperty().bind(e.progressProperty());
+            manager.labels().get(i).textProperty().bind(e.messageProperty());
 
-            manager.addEdges(leftRunnable.getEdges());
-            manager.addEdges(bottomRunnable.getEdges());
-            manager.addEdges(rightRunnable.getEdges());
-        }catch(InterruptedException e) {
-
+            //create callback for javaFX task onsuccess
+            e.setOnSucceeded(event -> addToManager(e.getValue()));
+            //Add task to executorservice pool
+            executorService.execute(e);
         }
+    }
+
+    /**
+     * adds the received edges from an async task to the storage list.
+     * @param receivedEdges
+     */
+    public void addToManager(List<Edge> receivedEdges) {
+        counter++;
+        edges.addAll(receivedEdges);
+
+        if(counter == 3) {
+            //all tasks have finished, send a notify to the observer
+            setChanged();
+            //notify observers with created edges.
+            notifyObservers(this.edges);
+        }
+
     }
 
     public void terminateThreads() {
-        if(thread1 != null && thread2 != null && thread3 != null) {
-            thread1.interrupt();
-            thread2.interrupt();
-            thread3.interrupt();
+        try{
+            //shut down all running threads.
+            executorService.shutdown();
+            executorService.awaitTermination(3000, TimeUnit.MILLISECONDS);
+            executorService = Executors.newFixedThreadPool(3);
+        } catch(InterruptedException e) {
+            System.out.println(e);
         }
+
     }
 
     public void setLevel(int lvl) {
